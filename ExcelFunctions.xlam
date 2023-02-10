@@ -1,0 +1,240 @@
+' Mouse Cursor Variables
+Public Declare Function SetCursorPos Lib "user32" (ByVal x As Long, ByVal y As Long) As Long
+Public Declare Sub mouse_event Lib "user32" (ByVal dwFlags As Long, ByVal dx As Long, ByVal dy As Long, ByVal cButtons As Long, ByVal dwExtraInfo As Long)
+Public Const MOUSEEVENTF_LEFTDOWN = &H2
+Public Const MOUSEEVENTF_LEFTUP = &H4
+Public Const MOUSEEVENTF_RIGHTDOWN As Long = &H8
+Public Const MOUSEEVENTF_RIGHTUP As Long = &H10
+
+' Window Control Variables
+Declare Function apiShowWindow Lib "user32" Alias "ShowWindow" (ByVal hwnd As Long, ByVal nCmdShow As Long) As Long
+Global Const SW_MAXIMIZE = 3
+Global Const SW_SHOWNORMAL = 1
+Global Const SW_SHOWMINIMIZED = 2
+
+' Counts items based on their id.
+' Requires a list sorted by the item id
+' If the IDs are identical it adds the old value to the current value otherwise it outputs the current value
+' For example given the list of item ids and quantities below the function will output the values in the count column
+' Assuming the top left cell with the title "Item ID" is A1 the formula in C2 is =PPM_COUNT(A2, A1, B2, C1)
+' |---------|-----|-------|
+' | Item ID | QTY | Count |
+' |   123   |  2  |   2   |
+' |   123   |  4  |   6   |
+' |   123   |  6  |  12   |
+' |   145   |  1  |   1   |
+' |   145   |  2  |   3   |
+' |   145   |  4  |   7   |
+' |   145   |  5  |  12   |
+' |---------|-----|-------|
+Function PPM_COUNT(id, oldid, count, oldcount)
+    If id = oldid Then
+        PPM_COUNT = count + oldcount
+    Else
+        PPM_COUNT = count
+    End If
+        
+End Function
+
+' Creates totals to allow for easier manual completion of the PPM Report
+' If id and newid are identical the function prints an empty cell, if the ids are different it outputs the item ID and total
+' so that filtering can be used to hide empty rows
+' For example given the list of item ids, quantities, and counts below (provided by the PPM_COUNT function) the function will output the values in the "total" column
+' Assuming the top left cell with the title "Item ID" is A1 the formula in D2 is =PPM_TOTALS(A2, A3, C2)
+' |---------|-----|-------|---------|
+' | Item ID | QTY | Count |  Total  |
+' |   123   |  2  |   2   |         |
+' |   123   |  4  |   6   |         |
+' |   123   |  6  |  12   | 123: 12 |
+' |   145   |  1  |   1   |         |
+' |   145   |  2  |   3   |         |
+' |   145   |  4  |   7   |         |
+' |   145   |  5  |  12   | 145: 12 |
+' |---------|-----|-------|---------|
+Function PPM_TOTALS(id, newid, count)
+    If id = newid Then
+        PPM_TOTALS = " "
+    Else
+        PPM_TOTALS = id & ": " & count
+    End If
+End Function
+
+' Capitalizes all Alpha characters in the currently highlighted range
+Sub AllCaps()
+    For Each Cell In Selection
+        If Not Cell.HasFormula Then
+            Cell.Value = UCase(Cell.Value)
+        End If
+    Next Cell
+End Sub
+
+' Removes the extra "21" from the beginning of serial numbers
+' WARNING: Only tested with CPAPs and BiPAPs from ResMed
+' TODO: Add support for more serial number types
+Sub SN_FIX()
+    For Each Cell In Selection
+        If Cell.Value > 2100000000000# Then
+            Cell.Value = Cell.Value - 2100000000000#
+        End If
+    Next Cell
+End Sub
+
+' Rewrite of the PPM_TOTALS function used in the TransferValues subroutine
+' Returns a -1 instead of a blank if the ids match and returns the count passed to the function if the ids are different
+Function TRANSFER_TOTAL(id, newid, count)
+    If id = newid Then
+        TRANSFER_TOTAL = -1
+    Else
+        TRANSFER_TOTAL = count
+    End If
+End Function
+
+' Private subroutine used when automating the transfer of values from the PPM report to BT
+' Adds the PPM_COUNT function to Column "G"
+Private Sub SetUpCount()
+    Dim ws As Worksheet
+    Dim rowcount As Integer
+    
+    Set ws = ActiveSheet
+    rowcount = ws.UsedRange.Rows.count
+    
+    ws.Range("A1:F" & rowcount).Sort Key1:=Range("D2"), Order1:=xlAscending, Header:=xlYes
+    ws.Range("G1").Value = "Count"
+    
+    For i = 2 To rowcount
+        ws.Cells(i, 7).Formula = "=PPM_COUNT(D" & i & ", D" & i - 1 & ", F" & i & ", G" & i - 1 & ")"
+    Next
+End Sub
+
+Sub Test()
+    Call SetUpCount
+End Sub
+
+' Set up PPM_COUNT and Sort WorkSheet, paste transaction link in Cell "J1"
+' Subroutine copies higest count for each item and adds it to the transaction at the link pasted
+' Relies HEAVILY on Brightree's website id's may break with any BT update
+Sub TransferValues()
+    Dim ws As Worksheet
+    Dim edge As Object
+    Dim id As String
+    Dim newid As String
+    Dim total As Integer
+    Dim startTime As Date
+    Dim transactionURL As String
+    Dim lineCount As Integer
+    
+    ' Keep a count of how many items we added to the report
+    lineCount = 0
+    
+    ' Set time that the routine starts
+    startTime = VBA.Now
+    
+    ' Precalculate totals usin PPM_COUNT function to reduce overhead while processing the report
+    Call SetUpCount
+    
+    ' Shorthand access to ActiveSheet
+    Set ws = ActiveSheet
+    
+    ' Create IE Instance
+    Set ie = CreateObject("InternetExplorer.Application")
+    
+    ' Set IE to be visible and maximize it
+    ie.Visible = True
+    apiShowWindow ie.hwnd, SW_MAXIMIZE
+    
+    ' Set transactionURL to Cell "J1"
+    transactionURL = ws.Cells(1, 10).Value
+    
+    ' Navigate to transaction page.
+    ie.Navigate transactionURL
+    
+    ' Wait for ie to say it's ready
+    Do While ie.ReadyState <> 4
+        DoEvents
+    Loop
+    
+    ' Sleep 5 seconds for safety
+    Sleep (5)
+    
+    ' Check if we were redirected to the login page, if so log in
+    If InStr(ie.LocationURL, "login") Then
+        ie.Document.getElementById("Username").Value = ws.Cells(1, 11).Value
+        ie.Document.getElementById("Password").Value = ws.Cells(2, 11).Value
+        ie.Document.getElementById("LogInBtn").Click
+        
+        ' Wait for ie to say it's ready
+        Do While ie.ReadyState <> 4
+            DoEvents
+        Loop
+        
+        ' Sleep 5 seconds for safety
+        Sleep (5)
+        
+        ' Navigate back to transaction page.
+        ie.Navigate transactionURL
+    End If
+    
+    ' Wait for ie to say it's ready
+    Do While ie.ReadyState <> 4
+        DoEvents
+    Loop
+    
+    ' Sleep 5 seconds for safety
+    Sleep (5)
+    
+    ' Loop through items
+    For i = 2 To ws.UsedRange.Rows.count
+        ' Move mouse every 5 minutes to keep computer awake
+        
+        If DateDiff("n", startTime, VBA.Now) Mod 5 = 0 Then
+            SetCursorPos WorksheetFunction.RandBetween(200, 400), WorksheetFunction.RandBetween(200, 400)
+        End If
+        
+        ' Pull information from sheet
+        id = ws.Cells(i, 4).Value
+        newid = ws.Cells(i + 1, 4).Value
+        count = ws.Cells(i, 7).Value
+        total = CInt(TRANSFER_TOTAL(id, newid, count)) ' Returns -1 if the ids are identical
+        
+        If total > 0 Then
+            ' Internal Value for PPM Location
+            ie.Document.getElementById("ctl00_c_luLocations_lookup_cbLookup_value").Value = 238
+            ie.Document.getElementById("ctl00_c_luLocations_lookup_cbLookup_text").Value = "PPM Fulfilment"
+            ' Quantity
+            ie.Document.getElementById("ctl00_c_txtQuantity_tb").Value = total
+            ' Item ID
+            ie.Document.getElementById("ctl00_c_txtUPC_tb").Value = id
+            ' Submit
+            ie.Document.getElementById("ctl00_c_btnQuickAdd_input").Click
+            lineCount = lineCount + 1
+            
+            ' Wait for ie to say it's ready
+            Do While ie.ReadyState <> 4
+                DoEvents
+            Loop
+            
+            ' Sleep 7 seconds for safety
+            Sleep (7)
+        End If
+    Next
+    
+    ' Close ie window
+    ie.Quit
+    
+    ' Popup to give information about this run
+    MsgBox ("Report complete, visit " & transactionURL & " to review and post." & vbNewLine _
+    & "Total Lines added: " & lineCount & vbNewLine _
+    & "Time Elapsed: " & DateDiff("n", startTime, VBA.Now) & " Minutes")
+End Sub
+
+' Waits for the given number of seconds
+Private Sub Sleep(seconds)
+    Application.Wait VBA.DateAdd("s", seconds, VBA.Now)
+End Sub
+
+' Example of how to click using mouse. May come in handy eventually
+Private Sub SingleClick()
+  SetCursorPos 100, 100 'x and y position
+  mouse_event MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0
+  mouse_event MOUSEEVENTF_LEFTUP, 0, 0, 0, 0
+End Sub
