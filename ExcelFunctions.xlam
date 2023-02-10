@@ -33,7 +33,6 @@ Function PPM_COUNT(id, oldid, count, oldcount)
     Else
         PPM_COUNT = count
     End If
-        
 End Function
 
 ' Creates totals to allow for easier manual completion of the PPM Report
@@ -110,6 +109,32 @@ Sub Test()
     Call SetUpCount
 End Sub
 
+Sub UPCNotFoundError()
+    Dim errorElement = ie.Document.getElementById("ct100_c_ValidationSummary1")
+
+    If errorElement = Null
+        return False
+    End If
+
+    If errorElement.Value.Contains("UPC not found.")
+        return True
+    End If
+
+    ' For Each child in errorElement.Children
+    '     If child.tagName = "ul"
+    '         For Each listItem in child.Children
+    '             If listItem.tagName = "li"
+    '                 If listItem.Value = "UPC not Found."
+    '                     ' Handle Error
+    '                 End If
+    '             End If
+    '         Next
+
+    '     End If
+    ' Next
+    return False
+End Sub
+
 ' Set up PPM_COUNT and Sort WorkSheet, paste transaction link in Cell "J1"
 ' Subroutine copies higest count for each item and adds it to the transaction at the link pasted
 ' Relies HEAVILY on Brightree's website id's may break with any BT update
@@ -122,6 +147,7 @@ Sub TransferValues()
     Dim startTime As Date
     Dim transactionURL As String
     Dim lineCount As Integer
+    Dim errorItems As String
     
     ' Keep a count of how many items we added to the report
     lineCount = 0
@@ -185,11 +211,15 @@ Sub TransferValues()
     ' Loop through items
     For i = 2 To ws.UsedRange.Rows.count
         ' Move mouse every 5 minutes to keep computer awake
-        
         If DateDiff("n", startTime, VBA.Now) Mod 5 = 0 Then
             SetCursorPos WorksheetFunction.RandBetween(200, 400), WorksheetFunction.RandBetween(200, 400)
         End If
-        
+
+        ' Check if there was an error with the previous item, if so add it to the list of errored items
+        If UPCNotFoundError
+            errorItems = errorItems & ws.Cells(i-1, 4).Value & ", "
+        End If
+         
         ' Pull information from sheet
         id = ws.Cells(i, 4).Value
         newid = ws.Cells(i + 1, 4).Value
@@ -221,6 +251,9 @@ Sub TransferValues()
     ' Close ie window
     ie.Quit
     
+    ' Print Error Items to "J2"
+    ws.Cells(2, 10).Value = errorItems
+
     ' Popup to give information about this run
     MsgBox ("Report complete, visit " & transactionURL & " to review and post." & vbNewLine _
     & "Total Lines added: " & lineCount & vbNewLine _
